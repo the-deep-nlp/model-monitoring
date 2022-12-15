@@ -3,9 +3,13 @@ import logging
 import boto3
 import pandas as pd
 import numpy as np
+
+from collections import defaultdict
 from typing import List
 from tqdm import tqdm
 from botocore.exceptions import ClientError
+
+from postprocess_cpu_model_outputs import convert_current_dict_to_previous_one, get_predictions_all
 
 ENDPOINT_NAME = "main-model-cpu"
 AWS_REGION = "us-east-1"
@@ -14,23 +18,34 @@ BATCH = 10
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class Embeddings:
-    def __init__(self, dataframe: pd.DataFrame):
+class ClassificationModelOutput:
+    def __init__(self,
+        dataframe: pd.DataFrame,
+        prediction_required: bool=True,
+        embeddings_required: bool=True
+    ):
         self.dataframe = dataframe
         self.sg_client = boto3.session.Session().client(
             "sagemaker-runtime", region_name=AWS_REGION
         )
+        self.prediction_required = prediction_required
+        self.embeddings_required = embeddings_required
+        self.embeddings = []
+        self.predictions = []
+        self.thresholds = {}
 
-    def _create_df(self, entries: str) -> dict:
+    def _create_df(self,
+        entries: str
+    ) -> dict:
         df = pd.DataFrame({"excerpt": entries, "index": range(len(entries))})
         df["return_type"] = "default_analyis"
         df["analyis_framework_id"] = "all"
 
         df["interpretability"] = False
         df["ratio_interpreted_labels"] = 0.5
-        df["return_prediction_labels"] = False
+        df["return_prediction_labels"] = self.prediction_required
 
-        df["output_backbone_embeddings"] = True
+        df["output_backbone_embeddings"] = self.embeddings_required
         df["pooling_type"] = "['mean_pooling']"
         df["finetuned_task"] = "['first_level_tags', 'subpillars']"
         df["embeddings_return_type"] = "list"
@@ -44,43 +59,107 @@ class Embeddings:
                 Body=backbone_inputs_json,
                 ContentType="application/json; format=pandas-split"
             )
-            embeddings = json.loads(response["Body"].read().decode("ascii"))
-            return embeddings["output_backbone"]
+            return json.loads(response["Body"].read().decode("ascii"))
         except ClientError as err:
             logger.error(str(err))
             return []
 
-    def _get_embeddings(self, excerpt: str) -> List:
+    def _get_outputs(self, excerpt: str) -> None:
         df_json = self._create_df(excerpt)
-        embeddings = self.invoke_endpoint(df_json)
-        return embeddings
+        outputs = self.invoke_endpoint(df_json)
+        if self.embeddings_required:
+            self.embeddings = outputs["output_backbone"]
+        if self.prediction_required:
+            self.predictions = outputs["raw_predictions"]
+            self.thresholds = outputs["thresholds"]
     
+    def column_mapping(self, cols) -> dict:
+        return {col: f"{col}_pred" for col in cols}
+
     def generate_embeddings(self) -> pd.DataFrame:
-        temp_series =  pd.Series([], dtype=pd.StringDtype())
+        return self.embeddings
+            
+    def generate_predictions(self) -> List[dict]:
+        preds = defaultdict(list)
+
+        output_ratios = self.predictions
+
+        thresholds = self.thresholds
+
+        clean_thresholds = convert_current_dict_to_previous_one(thresholds)
+
+        clean_outputs = [
+            convert_current_dict_to_previous_one(one_entry_preds)
+            for one_entry_preds in output_ratios
+        ]
+
+        final_predictions = get_predictions_all(clean_outputs)
+    
+        for k, v in final_predictions.items():
+            preds[k].append(v[0])
+        return preds
+    
+    def generate_outputs(self) -> pd.DataFrame:
+        embedding_series =  pd.Series([], dtype=pd.StringDtype())
+        prediction_df = pd.DataFrame([], dtype=pd.StringDtype())
         for entries_batch in tqdm(
             np.array_split(self.dataframe, BATCH)
         ):
-            temp_series = pd.concat(
-                [
-                    temp_series,
-                    pd.Series(self._get_embeddings(entries_batch["excerpt"]))
-                ], axis=0, ignore_index=True
-            )
-        final_df = pd.concat([
-            self.dataframe["entry_id"], temp_series.to_frame("embeddings")],
-            axis=1
+            self._get_outputs(entries_batch["excerpt"])
+            if self.embeddings_required:
+                embedding_series = pd.concat(
+                    [
+                        embedding_series,
+                        pd.Series(self.embeddings)
+                    ], axis=0, ignore_index=True
+                )
+            if self.prediction_required:
+                prediction_df = pd.concat(
+                    [
+                        prediction_df,
+                        pd.DataFrame(self.generate_predictions())
+                    ], ignore_index=True
+                )
+        
+        prediction_df.rename(
+            columns= self.column_mapping(prediction_df.columns),
+            inplace=True
         )
+
+        if self.embeddings_required and self.prediction_required:
+            final_df = pd.concat([
+                self.dataframe["entry_id"],
+                embedding_series.to_frame("embeddings"),
+                prediction_df
+            ], axis=1)
+        elif self.embeddings_required:
+            final_df = pd.concat([
+                self.dataframe["entry_id"],
+                embedding_series.to_frame("embeddings")
+            ], axis=1)
+        elif self.prediction_required:
+            final_df = pd.concat([
+                self.dataframe["entry_id"],
+                prediction_df
+            ], axis=1)
+        
         return final_df
 
 
 if __name__ == "__main__":
     dataset_path = "csvfiles/test_v0.7.1.csv"
-    df = pd.read_csv(dataset_path).sample(50).reset_index()
+    df = pd.read_csv(dataset_path).sample(10).reset_index()
 
-    embeddings = Embeddings(df)
-    df = embeddings.generate_embeddings()
+    embeddings = ClassificationModelOutput(
+        df,
+        prediction_required=True,
+        embeddings_required=True
+    )
+    df = embeddings.generate_outputs()
 
-    df.to_csv("results_with_embeddings.csv")
+    print(df)
+
+    #df.to_csv("results_with_embeddings.csv")
 
 
 
