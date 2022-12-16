@@ -135,12 +135,84 @@ class ModelPerformance:
                 per_tag_f1score_df
             ], axis=1)
         
-        print(final_df)
+        return final_df
+    
+    def all_projects_perf_metrics(self, metrics_average_type="macro"):
+        """
+        Performance Metrics of the all the projects altogether
+        """
+        all_projects_performance_metrics = {}
 
+        for category in self.categories:
+            precision, recall, f1score, support = precision_recall_fscore_support(
+                list(self.dataframe[f"{category}_transformed"]),
+                list(self.dataframe[f"{category}_pred_transformed"]),
+                average=metrics_average_type,
+                zero_division=0
+            )
             
+            all_projects_performance_metrics[category] = {
+                "precision": precision,
+                "recall": recall,
+                "f1score": f1score,
+                "support": support
+            }
+        return pd.DataFrame(all_projects_performance_metrics).T # (x, y) = (project_id, perf_metrics)
+    
 
+    def completely_matched_tags(self, lst):
+        return (lst[0] == lst[1]).sum()
 
+    def missing_tags(self, lst):
+        return (lst[0] > lst[1]).sum()
+    
+    def wrong_tags(self, lst):
+        return (lst[0]<lst[1]).sum()
+    
+    def calculate_ratios(self):
+        cat_to_mlb = self._category_to_mlb()
+        ratios_df = pd.DataFrame()
 
+        for category in self.categories:
+            ratios_df[f"{category}_completely_matched"] = pd.Series(list(
+                map(
+                    self.completely_matched_tags,
+                    list(zip(np.array(self.dataframe[f"{category}_transformed"]), np.array(self.dataframe[f"{category}_pred_transformed"])))
+                )
+            ))
+            ratios_df[f"{category}_completely_matched"] /= len(cat_to_mlb[category].classes_)
+
+            ratios_df[f"{category}_missing"] = pd.Series(list(
+                map(self.missing_tags,
+                list(zip(np.array(self.dataframe[f"{category}_transformed"]), np.array(self.dataframe[f"{category}_pred_transformed"])))
+                )
+            ))
+            ratios_df[f"{category}_missing"] /= len(cat_to_mlb[category].classes_)
+            
+            ratios_df[f"{category}_wrong"] = pd.Series(list(
+                map(self.wrong_tags,
+                list(zip(np.array(self.dataframe[f"{category}_transformed"]), np.array(self.dataframe[f"{category}_pred_transformed"])))
+                )
+            ))
+            ratios_df[f"{category}_wrong"] /= len(cat_to_mlb[category].classes_)
+
+        # Add entry_id and project_id columns to the df
+        ratios_df = pd.concat([
+            ratios_df,
+            self.dataframe[["entry_id", "project_id"]]
+        ], axis=1)
+    
+        return ratios_df
+    
+    def per_project_calc_ratios(self):
+        ratios_df = self.calculate_ratios()
+        final_df = pd.DataFrame()
+        for category in self.categories:
+            final_df[f"{category}_completely_matched_mean"] = ratios_df.groupby(["project_id"])[f"{category}_completely_matched"].mean()
+            final_df[f"{category}_missing_mean"] = ratios_df.groupby(["project_id"])[f"{category}_missing"].mean()
+            final_df[f"{category}_wrong_mean"] = ratios_df.groupby(["project_id"])[f"{category}_wrong"].mean()
+        
+        return final_df
 
 if __name__ == "__main__":
     df = pd.read_csv("csvfiles/sampled_data_with_predictions_testset.csv").sample(n=50, random_state=1234).reset_index()
@@ -150,6 +222,9 @@ if __name__ == "__main__":
     modelperf._label_transform()
     #df2 = modelperf.project_wise_perf_metrics()
     modelperf.per_tag_perf_metrics()
+    df = modelperf.all_projects_perf_metrics()
+    modelperf.calculate_ratios()
+    modelperf.per_project_calc_ratios()
 
     #print(df2)
 
