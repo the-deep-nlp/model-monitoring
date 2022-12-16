@@ -67,15 +67,16 @@ class ClassificationModelOutput:
             )
             return json.loads(response["Body"].read().decode("ascii"))
         except ClientError as err:
-            logger.error(str(err))
-            return []
+            raise Exception(err)
 
     def _get_outputs(self, excerpt: str) -> None:
         df_json = self._create_df(excerpt)
         outputs = self.invoke_endpoint(df_json)
-        if self.embeddings_required:
+        if self.embeddings_required and "output_backbone" in outputs:
             self.embeddings = outputs["output_backbone"]
-        if self.prediction_required:
+        if self.prediction_required and (
+            "raw_predictions" in outputs and
+            "thresholds" in outputs):
             self.predictions = outputs["raw_predictions"]
             self.thresholds = outputs["thresholds"]
     
@@ -107,6 +108,8 @@ class ClassificationModelOutput:
         """
         embedding_series = pd.Series([], dtype=pd.StringDtype())
         prediction_df = pd.DataFrame([], dtype=pd.StringDtype())
+        final_df = pd.DataFrame([])
+
         for entries_batch in tqdm(
             np.array_split(self.dataframe, self.batch)
         ):
