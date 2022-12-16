@@ -4,7 +4,6 @@ import boto3
 import pandas as pd
 import numpy as np
 
-from collections import defaultdict
 from typing import List
 from tqdm import tqdm
 from botocore.exceptions import ClientError
@@ -19,12 +18,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ClassificationModelOutput:
+    """
+    Input: DataFrame with fields ['entry_id', 'excerpts'] (at least)
+    Output: DataFrame with fields ['entry_id', 'embeddings', 'sectors_pred', 'subpillars_2d_pred',
+       'subpillars_1d_pred', 'age_pred', 'gender_pred', 'affected_groups_pred',
+       'specific_needs_groups_pred', 'severity_pred']
+    """
     def __init__(self,
         dataframe: pd.DataFrame,
         prediction_required: bool=True,
         embeddings_required: bool=True
     ):
         self.dataframe = dataframe
+        self.batch = len(self.dataframe)//BATCH
         self.sg_client = boto3.session.Session().client(
             "sagemaker-runtime", region_name=AWS_REGION
         )
@@ -80,8 +86,6 @@ class ClassificationModelOutput:
         return self.embeddings
             
     def generate_predictions(self) -> List[dict]:
-        preds = defaultdict(list)
-
         output_ratios = self.predictions
 
         thresholds = self.thresholds
@@ -93,17 +97,18 @@ class ClassificationModelOutput:
             for one_entry_preds in output_ratios
         ]
 
-        final_predictions = get_predictions_all(clean_outputs)
-    
-        for k, v in final_predictions.items():
-            preds[k].append(v[0])
-        return preds
+        return get_predictions_all(clean_outputs)
     
     def generate_outputs(self) -> pd.DataFrame:
-        embedding_series =  pd.Series([], dtype=pd.StringDtype())
+        """
+        Returns a dataframe with fields ['entry_id', 'embeddings', 'sectors_pred', 'subpillars_2d_pred',
+       'subpillars_1d_pred', 'age_pred', 'gender_pred', 'affected_groups_pred',
+       'specific_needs_groups_pred', 'severity_pred']
+        """
+        embedding_series = pd.Series([], dtype=pd.StringDtype())
         prediction_df = pd.DataFrame([], dtype=pd.StringDtype())
         for entries_batch in tqdm(
-            np.array_split(self.dataframe, BATCH)
+            np.array_split(self.dataframe, self.batch)
         ):
             self._get_outputs(entries_batch["excerpt"])
             if self.embeddings_required:
@@ -122,7 +127,7 @@ class ClassificationModelOutput:
                 )
         
         prediction_df.rename(
-            columns= self.column_mapping(prediction_df.columns),
+            columns=self.column_mapping(prediction_df.columns),
             inplace=True
         )
 
@@ -148,7 +153,7 @@ class ClassificationModelOutput:
 
 if __name__ == "__main__":
     dataset_path = "csvfiles/test_v0.7.1.csv"
-    df = pd.read_csv(dataset_path).sample(10).reset_index()
+    df = pd.read_csv(dataset_path).sample(n=50, random_state=1234).reset_index()
 
     embeddings = ClassificationModelOutput(
         df,
@@ -156,10 +161,7 @@ if __name__ == "__main__":
         embeddings_required=True
     )
     df = embeddings.generate_outputs()
-
-    print(df)
-
-    #df.to_csv("results_with_embeddings.csv")
+    #print(df)
 
 
 
