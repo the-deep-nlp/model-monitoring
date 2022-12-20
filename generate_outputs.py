@@ -1,5 +1,6 @@
 import json
 import logging
+import datetime
 import boto3
 import pandas as pd
 import numpy as np
@@ -151,12 +152,13 @@ class ClassificationModelOutput:
                 prediction_df
             ], axis=1)
         
+        final_df["generated_at"] = datetime.date.today()
         return final_df
 
 
 if __name__ == "__main__":
     dataset_path = "csvfiles/test_v0.7.1.csv"
-    df = pd.read_csv(dataset_path).sample(n=50, random_state=1234).reset_index()
+    df = pd.read_csv(dataset_path).sample(n=10, random_state=1234).reset_index()
 
     embeddings = ClassificationModelOutput(
         df,
