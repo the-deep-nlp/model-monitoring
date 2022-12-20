@@ -1,3 +1,4 @@
+import datetime
 import pandas as pd
 import numpy as np
 from ast import literal_eval
@@ -133,7 +134,11 @@ class ModelPerformance:
                     f"{category}_f1score": f1score,
                     f"{category}_support": support
                 })
-        return pd.DataFrame(project_perf_metrics).T # (x, y) = (project_id, perf_metrics)
+        final_df = pd.DataFrame(project_perf_metrics).T # (x, y) = (project_id, perf_metrics)
+        final_df.reset_index(inplace=True)
+        final_df = final_df.rename(columns={'index': 'project_id'})
+        final_df["generated_at"] = datetime.date.today()
+        return final_df
     
     def per_tag_perf_metrics(self) -> pd.DataFrame:
         """
@@ -170,12 +175,17 @@ class ModelPerformance:
         per_tag_f1score_df = pd.DataFrame.from_dict(tag_f1score_perf_metrics, orient="index", columns=["f1score"])
         per_tag_support_df = pd.DataFrame.from_dict(tag_support_perf_metrics, orient="index", columns=["support"])
 
-        return pd.concat([
+        final_df = pd.concat([
                 per_tag_precision_df,
                 per_tag_recall_df,
                 per_tag_f1score_df,
                 per_tag_support_df
             ], axis=1)
+        final_df.reset_index(inplace=True)
+        final_df = final_df.rename(columns={'index': 'tags'})
+        final_df["generated_at"] = datetime.date.today()
+        return final_df
+
     
     def all_projects_perf_metrics(self, metrics_average_type: str="macro"):
         """
@@ -202,7 +212,11 @@ class ModelPerformance:
                 "f1score": f1score,
                 "support": support
             }
-        return pd.DataFrame(all_projects_performance_metrics).T # (x, y) = (project_id, perf_metrics)
+        final_df = pd.DataFrame(all_projects_performance_metrics).T # (x, y) = (project_id, perf_metrics)
+        final_df.reset_index(inplace=True)
+        final_df = final_df.rename(columns={'index': 'categories'})
+        final_df["generated_at"] = datetime.date.today()
+        return final_df
     
 
     def completely_matched_tags(self, lst: list) -> int:
@@ -256,7 +270,8 @@ class ModelPerformance:
             ratios_df,
             self.dataframe[["entry_id", "project_id"]]
         ], axis=1)
-    
+
+        ratios_df["generated_at"] = datetime.date.today()
         return ratios_df
     
     def per_project_calc_ratios(self) -> pd.DataFrame:
@@ -273,6 +288,9 @@ class ModelPerformance:
             final_df[f"{category}_missing_mean"] = ratios_df.groupby(["project_id"])[f"{category}_missing"].mean()
             final_df[f"{category}_wrong_mean"] = ratios_df.groupby(["project_id"])[f"{category}_wrong"].mean()
         
+        final_df.reset_index(inplace=True)
+        final_df = final_df.rename(columns={'index': 'project_id'})
+        final_df["generated_at"] = datetime.date.today()
         return final_df
 
 if __name__ == "__main__":
